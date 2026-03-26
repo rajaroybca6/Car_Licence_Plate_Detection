@@ -6,12 +6,14 @@ from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfigurati
 from plate_finder import PlateFinder
 from ocr import OCR
 
+# 1. Page Config
 st.set_page_config(
     page_title="License Plate Recognition",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
+# Custom CSS for mobile responsiveness
 st.markdown("""
     <style>
         .main { padding: 1rem; }
@@ -24,37 +26,27 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("License Plate Recognition")
-st.caption("Detects multiple plates at once on Wi-Fi and mobile networks.")
+st.caption("Works on Wi-Fi and Mobile Data (4G/5G).")
 
 # -------------------------------------------------------------------
-# WebRTC config
-# For all devices + all networks:
-# 1. Deploy this app on a PUBLIC HTTPS URL
-# 2. Use a REAL TURN server
-#
-# Set these environment variables on your hosting platform:
-# TURN_URL_1=turn:your-turn-server:80?transport=tcp
-# TURN_URL_2=turn:your-turn-server:3478?transport=udp
-# TURN_URL_3=turns:your-turn-server:443?transport=tcp
-# TURN_USERNAME=your_username
-# TURN_PASSWORD=your_password
-#
-# Optional:
-# FORCE_TURN=true
+# WebRTC Configuration (Pulling from Streamlit Secrets)
 # -------------------------------------------------------------------
 
-turn_url_1 = os.getenv("TURN_URL_1", "")
-turn_url_2 = os.getenv("TURN_URL_2", "")
-turn_url_3 = os.getenv("TURN_URL_3", "")
-turn_username = os.getenv("TURN_USERNAME", "")
-turn_password = os.getenv("TURN_PASSWORD", "")
-force_turn = os.getenv("FORCE_TURN", "false").lower() == "true"
+# We use str() to ensure the values are read correctly from Secrets
+turn_url_1 = str(os.getenv("TURN_URL_1", ""))
+turn_url_2 = str(os.getenv("TURN_URL_2", ""))
+turn_url_3 = str(os.getenv("TURN_URL_3", ""))
+turn_username = str(os.getenv("TURN_USERNAME", ""))
+turn_password = str(os.getenv("TURN_PASSWORD", ""))
+force_turn = str(os.getenv("FORCE_TURN", "false")).lower() == "true"
 
+# STUN servers are free and work for Wi-Fi
 ice_servers = [
     {"urls": ["stun:stun.l.google.com:19302"]},
     {"urls": ["stun:stun1.l.google.com:19302"]},
 ]
 
+# Add the TURN servers for Mobile Data
 turn_urls = [url for url in [turn_url_1, turn_url_2, turn_url_3] if url.strip()]
 if turn_urls and turn_username and turn_password:
     ice_servers.append(
@@ -65,15 +57,20 @@ if turn_urls and turn_username and turn_password:
         }
     )
 
+# Force the connection to use the TURN relay if on mobile
 rtc_config_data = {
     "iceServers": ice_servers,
 }
 
 if force_turn:
+    # This is the "Magic" line that fixes mobile data connection
     rtc_config_data["iceTransportPolicy"] = "relay"
 
 RTC_CONFIG = RTCConfiguration(rtc_config_data)
 
+# -------------------------------------------------------------------
+# AI Model Loading
+# -------------------------------------------------------------------
 
 @st.cache_resource
 def load_models():
@@ -84,12 +81,14 @@ def load_models():
     )
     return finder, ocr
 
-
 plate_finder, ocr_model = load_models()
 
 if "plates_found" not in st.session_state:
     st.session_state.plates_found = []
 
+# -------------------------------------------------------------------
+# Video Processing Logic
+# -------------------------------------------------------------------
 
 class VideoProcessor(VideoProcessorBase):
     def __init__(self):
@@ -101,11 +100,13 @@ class VideoProcessor(VideoProcessorBase):
         img = frame.to_ndarray(format="bgr24")
         self.frame_counter += 1
 
+        # Resize for performance on mobile
         h, w = img.shape[:2]
         if w > 640:
             scale = 640 / w
             img = cv2.resize(img, (640, int(h * scale)))
 
+        # Process every 4th frame to reduce CPU lag
         if self.frame_counter % 4 == 0:
             self.current_plates = []
             self.plate_detected = False
@@ -132,90 +133,34 @@ class VideoProcessor(VideoProcessorBase):
                             self.current_plates.append(text)
                             self.plate_detected = True
 
-                            if (
-                                hasattr(plate_finder, "plate_locations")
-                                and i < len(plate_finder.plate_locations)
-                            ):
+                            if hasattr(plate_finder, "plate_locations") and i < len(plate_finder.plate_locations):
                                 x, y, w_p, h_p = plate_finder.plate_locations[i]
-                                colors = [
-                                    (0, 255, 0),
-                                    (0, 165, 255),
-                                    (255, 0, 0),
-                                    (0, 0, 255),
-                                    (255, 255, 0),
-                                ]
+                                colors = [(0, 255, 0), (0, 165, 255), (255, 0, 0), (0, 0, 255)]
                                 color = colors[i % len(colors)]
 
-                                cv2.rectangle(
-                                    img,
-                                    (x, y),
-                                    (x + w_p, y + h_p),
-                                    color,
-                                    2
-                                )
-                                cv2.putText(
-                                    img,
-                                    f"#{i+1}: {text}",
-                                    (x, max(y - 10, 20)),
-                                    cv2.FONT_HERSHEY_SIMPLEX,
-                                    0.8,
-                                    color,
-                                    2
-                                )
-                            else:
-                                cv2.putText(
-                                    img,
-                                    f"#{i+1}: {text}",
-                                    (20, 40 + i * 40),
-                                    cv2.FONT_HERSHEY_SIMPLEX,
-                                    0.9,
-                                    (0, 255, 0),
-                                    2
-                                )
+                                cv2.rectangle(img, (x, y), (x + w_p, y + h_p), color, 2)
+                                cv2.putText(img, f"#{i+1}: {text}", (x, max(y - 10, 20)),
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
 
-                if self.plate_detected:
-                    cv2.putText(
-                        img,
-                        f"YES - {len(self.current_plates)} PLATE(S) DETECTED",
-                        (10, img.shape[0] - 20),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
-                        (0, 255, 0),
-                        2
-                    )
-                else:
-                    cv2.putText(
-                        img,
-                        "NO PLATE DETECTED",
-                        (10, img.shape[0] - 20),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
-                        (0, 0, 255),
-                        2
-                    )
+                # Feedback overlay
+                status_color = (0, 255, 0) if self.plate_detected else (0, 0, 255)
+                status_text = f"YES - {len(self.current_plates)} DETECTED" if self.plate_detected else "NO PLATE"
+                cv2.putText(img, status_text, (10, img.shape[0] - 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
 
             except Exception:
-                cv2.putText(
-                    img,
-                    "Processing...",
-                    (20, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8,
-                    (0, 165, 255),
-                    2
-                )
+                pass
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
+# -------------------------------------------------------------------
+# User Interface
+# -------------------------------------------------------------------
 
 col1, col2 = st.columns([3, 1])
 
 with col2:
-    camera_facing = st.selectbox(
-        "Camera",
-        ["Back (Rear)", "Front (Selfie)"],
-        index=0
-    )
+    camera_facing = st.selectbox("Camera", ["Back (Rear)", "Front (Selfie)"], index=0)
 
 facing_mode = "environment" if camera_facing == "Back (Rear)" else "user"
 
@@ -236,46 +181,25 @@ with col1:
     )
 
 st.markdown("---")
-st.markdown("### Live Detection Status")
 
+# Live Update Section
 if ctx.video_processor:
     plates = ctx.video_processor.current_plates
-    detected = ctx.video_processor.plate_detected
-
-    if detected and plates:
-        st.success(f"YES - {len(plates)} Plate(s) Detected")
-        for i, plate in enumerate(plates):
-            st.markdown(f"**Car #{i+1}** -> `{plate}`")
+    if plates:
+        st.success(f"Detected: {', '.join(plates)}")
+        for plate in plates:
             if plate not in st.session_state.plates_found:
                 st.session_state.plates_found.append(plate)
     else:
-        st.error("NO - No Plate In View")
-else:
-    st.info("Click START to begin")
+        st.warning("Scanning for plates...")
 
-st.markdown("---")
-st.markdown("### Detection History (All Session)")
-
-if st.session_state.plates_found:
-    st.markdown(
-        f"**Total unique plates detected: {len(st.session_state.plates_found)}**"
-    )
-    for i, plate in enumerate(reversed(st.session_state.plates_found)):
-        st.write(f"**{i+1}.** `{plate}`")
-
-    if st.button("Clear History"):
-        st.session_state.plates_found = []
-        st.rerun()
-else:
-    st.info("No plates recorded yet this session.")
-
-with st.expander("Tips for best results"):
-    st.markdown("""
-    - Works with multiple cars in frame simultaneously
-    - Each plate gets a different color box
-    - Good lighting improves accuracy
-    - Hold camera 30-60 cm from plate
-    - iPhone users should use Safari
-    - For mobile network support, deploy on public HTTPS and configure TURN
-    """)
- #streamlit run app.py
+# History Section
+with st.expander("Detection History"):
+    if st.session_state.plates_found:
+        for i, plate in enumerate(reversed(st.session_state.plates_found)):
+            st.write(f"**{i+1}.** `{plate}`")
+        if st.button("Clear History"):
+            st.session_state.plates_found = []
+            st.rerun()
+    else:
+        st.info("No plates saved yet.")
