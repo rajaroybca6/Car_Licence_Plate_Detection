@@ -11,12 +11,10 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# CSS for mobile responsiveness
 st.markdown("""
     <style>
         .main { padding: 1rem; }
         h1 { font-size: 1.5rem !important; }
-        .stAlert { font-size: 0.9rem; }
         @media (max-width: 768px) {
             .main { padding: 0.5rem; }
             h1 { font-size: 1.2rem !important; }
@@ -25,14 +23,12 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🚗 License Plate Recognition")
-st.caption("Works on mobile, tablet, and desktop — point your camera at a license plate.")
+st.caption("Detects multiple plates at once — shows YES/NO status for each.")
 
-# ── ICE / STUN servers so WebRTC works across all networks & devices ──────────
 RTC_CONFIG = RTCConfiguration({
     "iceServers": [
         {"urls": ["stun:stun.l.google.com:19302"]},
         {"urls": ["stun:stun1.l.google.com:19302"]},
-        {"urls": ["stun:stun2.l.google.com:19302"]},
     ]
 })
 
@@ -47,26 +43,30 @@ def load_models():
 
 plate_finder, ocr_model = load_models()
 
-# ── Detected plates display (uses session state to persist across frames) ─────
 if "plates_found" not in st.session_state:
     st.session_state.plates_found = []
 
 class VideoProcessor(VideoProcessorBase):
     def __init__(self):
         self.frame_counter = 0
+        self.current_plates = []   # ← list for multiple plates
+        self.plate_detected = False  # ← YES/NO flag
 
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
         self.frame_counter += 1
 
-        # Resize for faster processing on all devices
         h, w = img.shape[:2]
         if w > 640:
             scale = 640 / w
             img = cv2.resize(img, (640, int(h * scale)))
 
-        # Process every 4th frame (balance speed vs accuracy)
         if self.frame_counter % 4 == 0:
+
+            # ── Reset every frame ──────────────────────────────────────────
+            self.current_plates = []
+            self.plate_detected = False
+
             try:
                 possible_plates = plate_finder.find_possible_plates(img)
 
@@ -85,40 +85,70 @@ class VideoProcessor(VideoProcessorBase):
                             continue
 
                         if count > 0 and text.strip():
-                            # Draw green box + label on frame
+                            self.current_plates.append(text)  # ← add each plate
+                            self.plate_detected = True         # ← YES
+
+                            # Draw box per plate
                             if (
                                 hasattr(plate_finder, "plate_locations")
                                 and i < len(plate_finder.plate_locations)
                             ):
                                 x, y, w_p, h_p = plate_finder.plate_locations[i]
+                                # Different color per plate
+                                colors = [
+                                    (0, 255, 0),    # green
+                                    (0, 165, 255),  # orange
+                                    (255, 0, 0),    # blue
+                                    (0, 0, 255),    # red
+                                    (255, 255, 0),  # cyan
+                                ]
+                                color = colors[i % len(colors)]
                                 cv2.rectangle(
                                     img, (x, y), (x + w_p, y + h_p),
-                                    (0, 255, 0), 2
+                                    color, 2
                                 )
                                 cv2.putText(
-                                    img, text, (x, y - 10),
+                                    img, f"#{i+1}: {text}", (x, y - 10),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.9,
-                                    (0, 255, 0), 2
+                                    color, 2
                                 )
                             else:
                                 cv2.putText(
-                                    img, f"Plate: {text}",
+                                    img, f"#{i+1}: {text}",
                                     (20, 40 + i * 40),
                                     cv2.FONT_HERSHEY_SIMPLEX, 1.0,
                                     (0, 255, 0), 2
                                 )
 
-            except Exception as e:
+                # ── Show YES/NO banner on video ────────────────────────────
+                if self.plate_detected:
+                    cv2.putText(
+                        img, f"✓ {len(self.current_plates)} PLATE(S) DETECTED",
+                        (10, img.shape[0] - 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                        (0, 255, 0), 2
+                    )
+                else:
+                    cv2.putText(
+                        img, "✗ NO PLATE DETECTED",
+                        (10, img.shape[0] - 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                        (0, 0, 255), 2
+                    )
+
+            except Exception:
                 cv2.putText(
                     img, "Processing...", (20, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 2
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8,
+                    (0, 165, 255), 2
                 )
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 
-# ── Camera selector (front / rear for mobile) ─────────────────────────────────
+# ── Camera selector ───────────────────────────────────────────────────────────
 col1, col2 = st.columns([3, 1])
+
 with col2:
     camera_facing = st.selectbox(
         "Camera",
@@ -144,16 +174,53 @@ with col1:
         async_processing=True,
     )
 
-# ── Instructions ──────────────────────────────────────────────────────────────
-with st.expander("ℹ️ How to use", expanded=False):
-    st.markdown("""
-    1. Click **START** above and allow camera access when prompted
-    2. Point your camera at a **license plate**
-    3. Hold steady — plates are detected automatically
-    4. Use **Back (Rear)** camera on mobile for best results
-    5. Good lighting improves accuracy
-    """)
-
+# ── Live Status Panel ─────────────────────────────────────────────────────────
 st.markdown("---")
-st.caption("💡 Tip: On iPhone, use Chrome or Firefox for best WebRTC support.")
-#streamlit run app.py
+st.markdown("### 🔍 Live Detection Status")
+
+if ctx.video_processor:
+    plates = ctx.video_processor.current_plates
+    detected = ctx.video_processor.plate_detected
+
+    if detected and plates:
+        # ── YES — show each plate ──────────────────────────────────────────
+        st.success(f"✅ YES — {len(plates)} Plate(s) Detected")
+        for i, plate in enumerate(plates):
+            st.markdown(f"**Car #{i+1}** → `{plate}`")
+
+            # Save to history
+            if plate not in st.session_state.plates_found:
+                st.session_state.plates_found.append(plate)
+    else:
+        # ── NO — no plate in view ──────────────────────────────────────────
+        st.error("❌ NO — No Plate In View")
+
+else:
+    st.info("📷 Click START to begin")
+
+# ── Detection History ─────────────────────────────────────────────────────────
+st.markdown("---")
+st.markdown("### 🗂️ Detection History (All Session)")
+
+if st.session_state.plates_found:
+    st.markdown(f"**Total unique plates detected: {len(st.session_state.plates_found)}**")
+    for i, plate in enumerate(reversed(st.session_state.plates_found)):
+        st.write(f"**{i+1}.** `{plate}`")
+
+    if st.button("🗑️ Clear History"):
+        st.session_state.plates_found = []
+        st.rerun()
+else:
+    st.info("No plates recorded yet this session.")
+
+# ── Tips ──────────────────────────────────────────────────────────────────────
+with st.expander("💡 Tips for best results"):
+    st.markdown("""
+    - ✅ Works with **multiple cars** in frame simultaneously
+    - ✅ Each plate gets a **different color box** (#1 green, #2 orange, #3 blue...)
+    - ✅ Bottom of video shows **YES/NO** at all times
+    - ✅ Good lighting helps accuracy
+    - ✅ Hold camera **30–60cm** from plate
+    - ⚠️ iPhone users: use **Chrome or Firefox**
+    """)
+    # streamlit run app.py
