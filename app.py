@@ -278,3 +278,4 @@ with st.expander("Tips for best results"):
     - iPhone users should use Safari
     - For mobile network support, deploy on public HTTPS and configure TURN
     """)
+ #streamlit run app.py
