@@ -232,6 +232,5 @@ with st.expander("💡 Tips for best results"):
     - ✅ Bottom of video shows **YES/NO** at all times
     - ✅ Good lighting helps accuracy
     - ✅ Hold camera **30–60cm** from plate
-    - ⚠️ iPhone users: use **Chrome or Firefox**
+    - ⚠️ iPhone users: use **Safari**
     """)
-    # streamlit run app.py
