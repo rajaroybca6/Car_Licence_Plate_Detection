@@ -23,12 +23,24 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🚗 License Plate Recognition")
-st.caption("Detects multiple plates at once — shows YES/NO status for each.")
+st.caption("Detects multiple plates at once — works on Wi-Fi and Mobile Data.")
 
+# --- THIS IS THE ONLY PART UPDATED TO ALLOW MOBILE DATA ---
 RTC_CONFIG = RTCConfiguration({
     "iceServers": [
         {"urls": ["stun:stun.l.google.com:19302"]},
         {"urls": ["stun:stun1.l.google.com:19302"]},
+        # TURN servers bypass cellular firewalls (Mobile Data)
+        {
+            "urls": ["turn:openrelay.metered.ca:80", "turn:openrelay.metered.ca:443"],
+            "username": "openrelayproject",
+            "credential": "openrelayproject"
+        },
+        {
+            "urls": ["turns:openrelay.metered.ca:443?transport=tcp"],
+            "username": "openrelayproject",
+            "credential": "openrelayproject"
+        }
     ]
 })
 
@@ -62,7 +74,6 @@ class VideoProcessor(VideoProcessorBase):
             img = cv2.resize(img, (640, int(h * scale)))
 
         if self.frame_counter % 4 == 0:
-
             # ── Reset every frame ──────────────────────────────────────────
             self.current_plates = []
             self.plate_detected = False
