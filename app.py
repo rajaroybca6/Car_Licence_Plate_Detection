@@ -2,89 +2,74 @@ import os
 import streamlit as st
 import cv2
 import av
+import logging
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
 from plate_finder import PlateFinder
 from ocr import OCR
 
-# 1. Page Config
+# Set up logging to see errors in the Streamlit Sidebar/Logs
+logger = logging.getLogger(__name__)
+
 st.set_page_config(
     page_title="License Plate Recognition",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# Custom CSS for mobile responsiveness
-st.markdown("""
-    <style>
-        .main { padding: 1rem; }
-        h1 { font-size: 1.5rem !important; }
-        @media (max-width: 768px) {
-            .main { padding: 0.5rem; }
-            h1 { font-size: 1.2rem !important; }
-        }
-    </style>
-""", unsafe_allow_html=True)
-
-st.title("License Plate Recognition")
-st.caption("Works on Wi-Fi and Mobile Data (4G/5G).")
+st.title("🚗 License Plate Recognition")
+st.caption("Optimized for Mobile Data (4G/5G) via TURN Relay")
 
 # -------------------------------------------------------------------
-# WebRTC Configuration (Pulling from Streamlit Secrets)
+# THE MOBILE DATA FIX (STRICT TURN CONFIG)
 # -------------------------------------------------------------------
 
-# We use str() to ensure the values are read correctly from Secrets
-turn_url_1 = str(os.getenv("TURN_URL_1", ""))
-turn_url_2 = str(os.getenv("TURN_URL_2", ""))
-turn_url_3 = str(os.getenv("TURN_URL_3", ""))
-turn_username = str(os.getenv("TURN_USERNAME", ""))
-turn_password = str(os.getenv("TURN_PASSWORD", ""))
-force_turn = str(os.getenv("FORCE_TURN", "false")).lower() == "true"
+# Get secrets from Streamlit Cloud
+turn_url_1 = os.getenv("TURN_URL_1", "turn:openrelay.metered.ca:80")
+turn_url_2 = os.getenv("TURN_URL_2", "turn:openrelay.metered.ca:443?transport=tcp")
+turn_url_3 = os.getenv("TURN_URL_3", "turns:openrelay.metered.ca:443?transport=tcp")
+turn_username = os.getenv("TURN_USERNAME", "openrelayproject")
+turn_password = os.getenv("TURN_PASSWORD", "openrelayproject")
 
-# STUN servers are free and work for Wi-Fi
-ice_servers = [
-    {"urls": ["stun:stun.l.google.com:19302"]},
-    {"urls": ["stun:stun1.l.google.com:19302"]},
-]
+# We force the connection to use the TURN server immediately
+# This bypasses the mobile carrier's P2P firewall.
+RTC_CONFIG = RTCConfiguration(
+    {
+        "iceServers": [
+            {"urls": ["stun:stun.l.google.com:19302"]},
+            {
+                "urls": [turn_url_1, turn_url_2, turn_url_3],
+                "username": turn_username,
+                "credential": turn_password,
+            },
+        ],
+        "iceTransportPolicy": "relay",  # CRITICAL: Forces the use of the TURN server
+    }
+)
 
-# Add the TURN servers for Mobile Data
-turn_urls = [url for url in [turn_url_1, turn_url_2, turn_url_3] if url.strip()]
-if turn_urls and turn_username and turn_password:
-    ice_servers.append(
-        {
-            "urls": turn_urls,
-            "username": turn_username,
-            "credential": turn_password,
-        }
-    )
-
-# Force the connection to use the TURN relay if on mobile
-rtc_config_data = {
-    "iceServers": ice_servers,
-}
-
-if force_turn:
-    # This is the "Magic" line that fixes mobile data connection
-    rtc_config_data["iceTransportPolicy"] = "relay"
-
-RTC_CONFIG = RTCConfiguration(rtc_config_data)
 
 # -------------------------------------------------------------------
-# AI Model Loading
+# Model Loading
 # -------------------------------------------------------------------
 
 @st.cache_resource
 def load_models():
-    finder = PlateFinder(minPlateArea=4100, maxPlateArea=15000)
-    ocr = OCR(
-        modelFile="model/binary_128_0.50_ver3.pb",
-        labelFile="model/binary_128_0.50_labels_ver2.txt"
-    )
-    return finder, ocr
+    try:
+        finder = PlateFinder(minPlateArea=4100, maxPlateArea=15000)
+        ocr = OCR(
+            modelFile="model/binary_128_0.50_ver3.pb",
+            labelFile="model/binary_128_0.50_labels_ver2.txt"
+        )
+        return finder, ocr
+    except Exception as e:
+        st.error(f"Error loading models: {e}")
+        return None, None
+
 
 plate_finder, ocr_model = load_models()
 
 if "plates_found" not in st.session_state:
     st.session_state.plates_found = []
+
 
 # -------------------------------------------------------------------
 # Video Processing Logic
@@ -100,14 +85,14 @@ class VideoProcessor(VideoProcessorBase):
         img = frame.to_ndarray(format="bgr24")
         self.frame_counter += 1
 
-        # Resize for performance on mobile
+        # Mobile Optimization: Resize to 640px width
         h, w = img.shape[:2]
         if w > 640:
             scale = 640 / w
             img = cv2.resize(img, (640, int(h * scale)))
 
-        # Process every 4th frame to reduce CPU lag
-        if self.frame_counter % 4 == 0:
+        # Process every 5th frame to keep the mobile CPU cool
+        if self.frame_counter % 5 == 0:
             self.current_plates = []
             self.plate_detected = False
 
@@ -116,90 +101,64 @@ class VideoProcessor(VideoProcessorBase):
 
                 if possible_plates:
                     for i, plate_img in enumerate(possible_plates):
-                        if i >= len(plate_finder.char_on_plate):
-                            continue
+                        if i >= len(plate_finder.char_on_plate): continue
 
                         chars = plate_finder.char_on_plate[i]
-
-                        try:
-                            text, count = ocr_model.label_image_list(
-                                chars, image_size=128
-                            )
-                        except Exception:
-                            continue
+                        text, count = ocr_model.label_image_list(chars, image_size=128)
 
                         if count > 0 and text.strip():
-                            text = text.strip()
-                            self.current_plates.append(text)
+                            clean_text = text.strip()
+                            self.current_plates.append(clean_text)
                             self.plate_detected = True
 
+                            # Draw on image
                             if hasattr(plate_finder, "plate_locations") and i < len(plate_finder.plate_locations):
                                 x, y, w_p, h_p = plate_finder.plate_locations[i]
-                                colors = [(0, 255, 0), (0, 165, 255), (255, 0, 0), (0, 0, 255)]
-                                color = colors[i % len(colors)]
+                                cv2.rectangle(img, (x, y), (x + w_p, y + h_p), (0, 255, 0), 2)
+                                cv2.putText(img, clean_text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
-                                cv2.rectangle(img, (x, y), (x + w_p, y + h_p), color, 2)
-                                cv2.putText(img, f"#{i+1}: {text}", (x, max(y - 10, 20)),
-                                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+                # Status Overlay
+                color = (0, 255, 0) if self.plate_detected else (0, 0, 255)
+                msg = "DETECTED" if self.plate_detected else "SCANNING..."
+                cv2.putText(img, msg, (10, img.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
-                # Feedback overlay
-                status_color = (0, 255, 0) if self.plate_detected else (0, 0, 255)
-                status_text = f"YES - {len(self.current_plates)} DETECTED" if self.plate_detected else "NO PLATE"
-                cv2.putText(img, status_text, (10, img.shape[0] - 20),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
-
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"Processing error: {e}")
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
+
 # -------------------------------------------------------------------
-# User Interface
+# UI Layout
 # -------------------------------------------------------------------
 
-col1, col2 = st.columns([3, 1])
-
-with col2:
-    camera_facing = st.selectbox("Camera", ["Back (Rear)", "Front (Selfie)"], index=0)
-
+camera_facing = st.radio("Select Camera", ["Back (Rear)", "Front (Selfie)"], horizontal=True)
 facing_mode = "environment" if camera_facing == "Back (Rear)" else "user"
 
-with col1:
-    ctx = webrtc_streamer(
-        key=f"plate-reader-{facing_mode}",
-        video_processor_factory=VideoProcessor,
-        rtc_configuration=RTC_CONFIG,
-        media_stream_constraints={
-            "video": {
-                "facingMode": {"ideal": facing_mode},
-                "width": {"ideal": 1280},
-                "height": {"ideal": 720},
-            },
-            "audio": False,
-        },
-        async_processing=True,
-    )
+ctx = webrtc_streamer(
+    key=f"plate-reader-{facing_mode}",
+    video_processor_factory=VideoProcessor,
+    rtc_configuration=RTC_CONFIG,
+    media_stream_constraints={
+        "video": {"facingMode": {"ideal": facing_mode}},
+        "audio": False,
+    },
+    async_processing=True,
+)
 
 st.markdown("---")
 
-# Live Update Section
+# Show Results Below Camera
 if ctx.video_processor:
     plates = ctx.video_processor.current_plates
     if plates:
-        st.success(f"Detected: {', '.join(plates)}")
-        for plate in plates:
-            if plate not in st.session_state.plates_found:
-                st.session_state.plates_found.append(plate)
+        for p in plates:
+            if p not in st.session_state.plates_found:
+                st.session_state.plates_found.append(p)
+            st.success(f"Plate Found: **{p}**")
     else:
-        st.warning("Scanning for plates...")
+        st.info("No plates currently in view.")
 
-# History Section
-with st.expander("Detection History"):
-    if st.session_state.plates_found:
-        for i, plate in enumerate(reversed(st.session_state.plates_found)):
-            st.write(f"**{i+1}.** `{plate}`")
-        if st.button("Clear History"):
-            st.session_state.plates_found = []
-            st.rerun()
-    else:
-        st.info("No plates saved yet.")
+with st.expander("Session History"):
+    for plate in reversed(st.session_state.plates_found):
+        st.write(f"- `{plate}`")
