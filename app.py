@@ -23,51 +23,51 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("License Plate Recognition")
-st.caption("Detects multiple plates at once on Wi-Fi and mobile networks.")
+st.title("🚗 License Plate Recognition")
+st.caption("Detects multiple plates at once — works on Wi-Fi and mobile networks.")
 
 # -------------------------------------------------------------------
-# WebRTC config
-# For all devices + all networks:
-# 1. Deploy this app on a PUBLIC HTTPS URL
-# 2. Use a REAL TURN server
-#
-# Set these environment variables on your hosting platform:
-# TURN_URL_1=turn:your-turn-server:80?transport=tcp
-# TURN_URL_2=turn:your-turn-server:3478?transport=udp
-# TURN_URL_3=turns:your-turn-server:443?transport=tcp
-# TURN_USERNAME=your_username
-# TURN_PASSWORD=your_password
-#
-# Optional:
-# FORCE_TURN=true
+# WebRTC / TURN config — reads from Streamlit Secrets
 # -------------------------------------------------------------------
+def _get_config(key, default=""):
+    return st.secrets.get(key, os.getenv(key, default))
 
-turn_url_1 = os.getenv("TURN_URL_1", "")
-turn_url_2 = os.getenv("TURN_URL_2", "")
-turn_url_3 = os.getenv("TURN_URL_3", "")
-turn_username = os.getenv("TURN_USERNAME", "")
-turn_password = os.getenv("TURN_PASSWORD", "")
-force_turn = os.getenv("FORCE_TURN", "false").lower() == "true"
+turn_url_1    = _get_config("TURN_URL_1")
+turn_url_2    = _get_config("TURN_URL_2")
+turn_url_3    = _get_config("TURN_URL_3")
+turn_url_4    = _get_config("TURN_URL_4")
+turn_username = _get_config("TURN_USERNAME")
+turn_password = _get_config("TURN_PASSWORD")
+force_turn    = _get_config("FORCE_TURN", "false").lower() == "true"
 
-ice_servers = [
-    {"urls": ["stun:stun.l.google.com:19302"]},
-    {"urls": ["stun:stun1.l.google.com:19302"]},
-]
+# Build ICE server list
+turn_urls = [u for u in [turn_url_1, turn_url_2, turn_url_3, turn_url_4] if u.strip()]
 
-turn_urls = [url for url in [turn_url_1, turn_url_2, turn_url_3] if url.strip()]
 if turn_urls and turn_username and turn_password:
-    ice_servers.append(
+    ice_servers = [
+        {"urls": ["stun:stun.relay.metered.ca:80"]},
         {
             "urls": turn_urls,
             "username": turn_username,
             "credential": turn_password,
-        }
-    )
+        },
+    ]
+else:
+    # Fallback: free public relay
+    ice_servers = [
+        {"urls": ["stun:stun.l.google.com:19302"]},
+        {
+            "urls": [
+                "turn:openrelay.metered.ca:80",
+                "turn:openrelay.metered.ca:443",
+                "turn:openrelay.metered.ca:443?transport=tcp",
+            ],
+            "username": "openrelayproject",
+            "credential": "openrelayproject",
+        },
+    ]
 
-rtc_config_data = {
-    "iceServers": ice_servers,
-}
+rtc_config_data = {"iceServers": ice_servers}
 
 if force_turn:
     rtc_config_data["iceTransportPolicy"] = "relay"
@@ -243,15 +243,15 @@ if ctx.video_processor:
     detected = ctx.video_processor.plate_detected
 
     if detected and plates:
-        st.success(f"YES - {len(plates)} Plate(s) Detected")
+        st.success(f"✅ YES - {len(plates)} Plate(s) Detected")
         for i, plate in enumerate(plates):
-            st.markdown(f"**Car #{i+1}** -> `{plate}`")
+            st.markdown(f"**Car #{i+1}** → `{plate}`")
             if plate not in st.session_state.plates_found:
                 st.session_state.plates_found.append(plate)
     else:
-        st.error("NO - No Plate In View")
+        st.error("❌ NO - No Plate In View")
 else:
-    st.info("Click START to begin")
+    st.info("📷 Click START to begin")
 
 st.markdown("---")
 st.markdown("### Detection History (All Session)")
@@ -263,19 +263,21 @@ if st.session_state.plates_found:
     for i, plate in enumerate(reversed(st.session_state.plates_found)):
         st.write(f"**{i+1}.** `{plate}`")
 
-    if st.button("Clear History"):
+    if st.button("🗑️ Clear History"):
         st.session_state.plates_found = []
         st.rerun()
 else:
     st.info("No plates recorded yet this session.")
 
-with st.expander("Tips for best results"):
+with st.expander("💡 Tips for best results"):
     st.markdown("""
-    - Works with multiple cars in frame simultaneously
-    - Each plate gets a different color box
-    - Good lighting improves accuracy
-    - Hold camera 30-60 cm from plate
-    - iPhone users should use Safari
-    - For mobile network support, deploy on public HTTPS and configure TURN
+    - ✅ Works with **multiple cars** in frame simultaneously
+    - ✅ Each plate gets a **different colour box**
+    - ✅ Now works on **Wi-Fi and mobile networks** (4G/5G)
+    - ✅ Good lighting improves accuracy
+    - ✅ Hold camera **30–60 cm** from plate
+    - ⚠️ iPhone users: use **Safari**
+    - ⚠️ Must be deployed on **public HTTPS** for mobile camera access
     """)
- #streamlit run app.py
+
+# streamlit run app.py
