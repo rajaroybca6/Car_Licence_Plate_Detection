@@ -296,5 +296,5 @@ st.sidebar.info(
     "license plate strings are processed in-memory in real-time and deleted "
     "upon session close. \n\n"
     "**Usage:** Please use only on your own vehicle or with explicit consent."
-"This is only for Study Purposes".)
+"This is only for Study Purposes.")
 # streamlit run app.py
