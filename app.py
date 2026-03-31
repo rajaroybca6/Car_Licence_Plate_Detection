@@ -23,6 +23,14 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+st.title("⚖️ **GDPR / Privacy Notice**\n\n"
+    "This is a technical Proof of Concept (PoC) created exclusively for "
+    "**school/college and study purposes**. \n\n"
+    "**Data Handling:** No data is stored permanently. Video frames and "
+    "license plate strings are processed in-memory in real-time and deleted "
+    "upon session close. \n\n"
+    "**Usage:** Please use only on your own vehicle or with explicit consent."
+"This is only for Study Purposes.")
 st.title("🚗 License Plate Recognition")
 st.caption("Detects multiple plates at once — works on Wi-Fi and mobile networks.")
 
